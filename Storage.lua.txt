@@ -1,0 +1,738 @@
+-- RemoteScanner v3 | LocalScript in StarterPlayerScripts
+-- Scans ReplicatedStorage + Workspace for all RemoteEvents/Functions
+-- Draggable, resizable, tabbed GUI
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- ─── Risk heuristics ────────────────────────────────────────────────────────
+local HIGH = {"purchase","buy","pay","damage","fire","kill","admin","spawn","give","award","setstat","delete","remove","ban","kick","setlevel"}
+local MED  = {"teleport","move","send","chat","message","update","set","change","request","load","save"}
+
+local function getRisk(name)
+	local l = name:lower()
+	for _, p in ipairs(HIGH) do if l:find(p) then return "HIGH" end end
+	for _, p in ipairs(MED)  do if l:find(p) then return "MED"  end end
+	return "LOW"
+end
+
+local riskColor = {
+	HIGH = Color3.fromRGB(210, 60, 60),
+	MED  = Color3.fromRGB(200, 150, 40),
+	LOW  = Color3.fromRGB(50, 175, 90),
+}
+
+-- ─── Scan ────────────────────────────────────────────────────────────────────
+local results = {}
+
+local function scan(parent)
+	for _, obj in ipairs(parent:GetDescendants()) do
+		local t = obj.ClassName
+		if t == "RemoteEvent" or t == "RemoteFunction" or t == "UnreliableRemoteEvent" then
+			table.insert(results, {
+				name  = obj.Name,
+				path  = obj:GetFullName(),
+				class = t,
+				risk  = getRisk(obj.Name),
+				obj   = obj,
+			})
+		end
+	end
+end
+
+scan(RS)
+scan(workspace)
+
+table.sort(results, function(a, b)
+	local o = {HIGH=1, MED=2, LOW=3}
+	return (o[a.risk] or 9) < (o[b.risk] or 9)
+end)
+
+local nHigh = 0; local nMed = 0; local nLow = 0
+for _, r in ipairs(results) do
+	if r.risk == "HIGH" then nHigh += 1
+	elseif r.risk == "MED" then nMed += 1
+	else nLow += 1 end
+end
+
+-- ─── GUI helpers ─────────────────────────────────────────────────────────────
+local function makeCorner(parent, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius or 6)
+	c.Parent = parent
+	return c
+end
+
+local function makeLabel(parent, text, size, color, font, xAlign)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextSize = size or 12
+	l.TextColor3 = color or Color3.fromRGB(220,220,230)
+	l.Font = font or Enum.Font.Gotham
+	l.TextXAlignment = xAlign or Enum.TextXAlignment.Left
+	l.TextScaled = false
+	l.Parent = parent
+	return l
+end
+
+local function makeButton(parent, text, size, bgColor, textColor)
+	local b = Instance.new("TextButton")
+	b.BackgroundColor3 = bgColor or Color3.fromRGB(40, 40, 52)
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextSize = size or 11
+	b.TextColor3 = textColor or Color3.fromRGB(200,200,215)
+	b.Font = Enum.Font.GothamBold
+	b.AutoButtonColor = true
+	b.Parent = parent
+	makeCorner(b, 5)
+	return b
+end
+
+-- ─── Root ScreenGui ──────────────────────────────────────────────────────────
+local sg = Instance.new("ScreenGui")
+sg.Name = "RemoteScannerV3"
+sg.ResetOnSpawn = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+sg.Parent = player.PlayerGui
+
+-- ─── Main frame ──────────────────────────────────────────────────────────────
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 500, 0, 560)
+main.Position = UDim2.new(0.5, -250, 0.5, -280)
+main.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Parent = sg
+makeCorner(main, 10)
+
+-- ─── Titlebar ────────────────────────────────────────────────────────────────
+local titlebar = Instance.new("Frame")
+titlebar.Size = UDim2.new(1, 0, 0, 40)
+titlebar.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
+titlebar.BorderSizePixel = 0
+titlebar.ZIndex = 5
+titlebar.Parent = main
+makeCorner(titlebar, 10)
+
+-- Fix bottom corners of titlebar
+local tbFix = Instance.new("Frame")
+tbFix.Size = UDim2.new(1, 0, 0.5, 0)
+tbFix.Position = UDim2.new(0, 0, 0.5, 0)
+tbFix.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
+tbFix.BorderSizePixel = 0
+tbFix.ZIndex = 5
+tbFix.Parent = titlebar
+
+-- Traffic light dots
+local dotCols = {Color3.fromRGB(255,95,87), Color3.fromRGB(255,189,46), Color3.fromRGB(40,200,64)}
+for i, col in ipairs(dotCols) do
+	local d = Instance.new("Frame")
+	d.Size = UDim2.new(0, 11, 0, 11)
+	d.Position = UDim2.new(0, 6 + (i-1)*17, 0.5, -5)
+	d.BackgroundColor3 = col
+	d.BorderSizePixel = 0
+	d.ZIndex = 6
+	d.Parent = titlebar
+	makeCorner(d, 99)
+end
+
+local titleLbl = makeLabel(titlebar, "  RemoteScanner v3", 13, Color3.fromRGB(220,220,235), Enum.Font.GothamBold)
+titleLbl.Size = UDim2.new(1, -160, 1, 0)
+titleLbl.Position = UDim2.new(0, 50, 0, 0)
+titleLbl.ZIndex = 6
+
+-- Titlebar buttons
+local function makeTbBtn(text, xOffset)
+	local b = makeButton(titlebar, text, 10, Color3.fromRGB(38, 38, 50), Color3.fromRGB(180,180,200))
+	b.Size = UDim2.new(0, 58, 0, 24)
+	b.Position = UDim2.new(1, xOffset, 0.5, -12)
+	b.ZIndex = 6
+	return b
+end
+
+local btnExport = makeTbBtn("Export", -68)
+local btnRescan = makeTbBtn("Rescan", -130)
+
+local closeBtn = makeButton(titlebar, "✕", 12, Color3.fromRGB(170, 45, 45), Color3.fromRGB(255,255,255))
+closeBtn.Size = UDim2.new(0, 26, 0, 26)
+closeBtn.Position = UDim2.new(1, -32, 0.5, -13)
+closeBtn.ZIndex = 6
+closeBtn.MouseButton1Click:Connect(function() sg:Destroy() end)
+
+-- ─── Drag ────────────────────────────────────────────────────────────────────
+local dragging = false
+local dragStart, frameStart
+
+titlebar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		frameStart = main.Position
+	end
+end)
+
+titlebar.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(
+			frameStart.X.Scale, frameStart.X.Offset + delta.X,
+			frameStart.Y.Scale, frameStart.Y.Offset + delta.Y
+		)
+	end
+end)
+
+-- ─── Stats bar ───────────────────────────────────────────────────────────────
+local statsBar = Instance.new("Frame")
+statsBar.Size = UDim2.new(1, -16, 0, 52)
+statsBar.Position = UDim2.new(0, 8, 0, 46)
+statsBar.BackgroundTransparency = 1
+statsBar.Parent = main
+
+local sLayout = Instance.new("UIListLayout")
+sLayout.FillDirection = Enum.FillDirection.Horizontal
+sLayout.Padding = UDim.new(0, 6)
+sLayout.Parent = statsBar
+
+local function makeStatCard(label, val, color)
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(0.25, -5, 1, 0)
+	card.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+	card.BorderSizePixel = 0
+	card.Parent = statsBar
+	makeCorner(card, 7)
+
+	local lbl = makeLabel(card, label, 10, Color3.fromRGB(110,110,130))
+	lbl.Size = UDim2.new(1, 0, 0, 18)
+	lbl.Position = UDim2.new(0, 0, 0, 5)
+	lbl.TextXAlignment = Enum.TextXAlignment.Center
+
+	local num = makeLabel(card, tostring(val), 20, color, Enum.Font.GothamBold)
+	num.Size = UDim2.new(1, 0, 0, 24)
+	num.Position = UDim2.new(0, 0, 0, 22)
+	num.TextXAlignment = Enum.TextXAlignment.Center
+end
+
+makeStatCard("TOTAL",  #results, Color3.fromRGB(180,180,205))
+makeStatCard("HIGH",   nHigh,    Color3.fromRGB(220,70,70))
+makeStatCard("MEDIUM", nMed,     Color3.fromRGB(205,155,40))
+makeStatCard("LOW",    nLow,     Color3.fromRGB(55,180,95))
+
+-- ─── Tab bar ─────────────────────────────────────────────────────────────────
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, 0, 0, 34)
+tabBar.Position = UDim2.new(0, 0, 0, 104)
+tabBar.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+tabBar.BorderSizePixel = 0
+tabBar.Parent = main
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Parent = tabBar
+
+local panels = {}
+local tabBtns = {}
+
+local function makeTab(label, id)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0, 115, 1, 0)
+	btn.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+	btn.BorderSizePixel = 0
+	btn.Text = label
+	btn.TextSize = 11
+	btn.TextColor3 = Color3.fromRGB(130, 130, 150)
+	btn.Font = Enum.Font.GothamBold
+	btn.AutoButtonColor = false
+	btn.Parent = tabBar
+
+	local panel = Instance.new("Frame")
+	panel.Size = UDim2.new(1, 0, 1, -138)
+	panel.Position = UDim2.new(0, 0, 0, 138)
+	panel.BackgroundTransparency = 1
+	panel.Visible = false
+	panel.Parent = main
+
+	tabBtns[id] = btn
+	panels[id] = panel
+	return btn, panel
+end
+
+local function switchTab(id)
+	for tid, btn in pairs(tabBtns) do
+		local active = (tid == id)
+		btn.TextColor3 = active and Color3.fromRGB(100,180,255) or Color3.fromRGB(130,130,150)
+		btn.BackgroundColor3 = active and Color3.fromRGB(28,28,40) or Color3.fromRGB(22,22,30)
+		panels[tid].Visible = active
+	end
+end
+
+local _, panelRemotes  = makeTab("Remotes",  "remotes")
+local _, panelTest     = makeTab("Test",      "test")
+local _, panelLog      = makeTab("Console",   "log")
+local _, panelSettings = makeTab("Settings",  "settings")
+
+for id, btn in pairs(tabBtns) do
+	btn.MouseButton1Click:Connect(function() switchTab(id) end)
+end
+
+-- ─── Console log ─────────────────────────────────────────────────────────────
+local logLines = {}
+
+local logScroll = Instance.new("ScrollingFrame")
+logScroll.Size = UDim2.new(1, -16, 1, -40)
+logScroll.Position = UDim2.new(0, 8, 0, 36)
+logScroll.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+logScroll.BorderSizePixel = 0
+logScroll.ScrollBarThickness = 3
+logScroll.ScrollBarImageColor3 = Color3.fromRGB(70,70,90)
+logScroll.CanvasSize = UDim2.new(0,0,0,0)
+logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logScroll.Parent = panelLog
+makeCorner(logScroll, 6)
+
+local logListLayout = Instance.new("UIListLayout")
+logListLayout.Parent = logScroll
+
+local logTypeColor = {
+	info  = Color3.fromRGB(100,180,255),
+	warn  = Color3.fromRGB(210,160,40),
+	error = Color3.fromRGB(215,65,65),
+	ok    = Color3.fromRGB(60,185,100),
+}
+
+local function addLog(msg, logType)
+	logType = logType or "info"
+	table.insert(logLines, {msg=msg, t=logType})
+	local line = Instance.new("TextLabel")
+	line.Size = UDim2.new(1, -8, 0, 18)
+	line.BackgroundTransparency = 1
+	line.Text = string.format("[%s] %s", logType:upper(), msg)
+	line.TextColor3 = logTypeColor[logType] or Color3.fromRGB(200,200,215)
+	line.TextSize = 10
+	line.Font = Enum.Font.Code
+	line.TextXAlignment = Enum.TextXAlignment.Left
+	line.TextTruncate = Enum.TextTruncate.AtEnd
+	line.Parent = logScroll
+	logScroll.CanvasPosition = Vector2.new(0, math.huge)
+end
+
+-- Log clear/copy buttons
+local logBtnBar = Instance.new("Frame")
+logBtnBar.Size = UDim2.new(1, 0, 0, 30)
+logBtnBar.Position = UDim2.new(0, 0, 0, 0)
+logBtnBar.BackgroundTransparency = 1
+logBtnBar.Parent = panelLog
+
+local btnClearLog = makeButton(logBtnBar, "Clear", 10, Color3.fromRGB(38,38,50))
+btnClearLog.Size = UDim2.new(0, 60, 0, 24)
+btnClearLog.Position = UDim2.new(0, 0, 0, 3)
+btnClearLog.MouseButton1Click:Connect(function()
+	for _, c in ipairs(logScroll:GetChildren()) do
+		if c:IsA("TextLabel") then c:Destroy() end
+	end
+	logLines = {}
+end)
+
+-- ─── REMOTES panel ───────────────────────────────────────────────────────────
+local remoteScroll = Instance.new("ScrollingFrame")
+remoteScroll.Size = UDim2.new(1, -16, 1, -8)
+remoteScroll.Position = UDim2.new(0, 8, 0, 4)
+remoteScroll.BackgroundTransparency = 1
+remoteScroll.ScrollBarThickness = 3
+remoteScroll.ScrollBarImageColor3 = Color3.fromRGB(70,70,90)
+remoteScroll.CanvasSize = UDim2.new(0,0,0,0)
+remoteScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+remoteScroll.Parent = panelRemotes
+
+local remLayout = Instance.new("UIListLayout")
+remLayout.Padding = UDim.new(0, 5)
+remLayout.Parent = remoteScroll
+
+local expandedRow = nil
+
+local function buildRemoteRows()
+	for _, c in ipairs(remoteScroll:GetChildren()) do
+		if not c:IsA("UIListLayout") then c:Destroy() end
+	end
+	expandedRow = nil
+
+	for _, r in ipairs(results) do
+		-- Row container
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 44)
+		row.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
+		row.BorderSizePixel = 0
+		row.ClipsDescendants = true
+		row.Parent = remoteScroll
+		makeCorner(row, 6)
+
+		-- Risk stripe
+		local stripe = Instance.new("Frame")
+		stripe.Size = UDim2.new(0, 3, 1, -10)
+		stripe.Position = UDim2.new(0, 0, 0, 5)
+		stripe.BackgroundColor3 = riskColor[r.risk]
+		stripe.BorderSizePixel = 0
+		stripe.Parent = row
+		makeCorner(stripe, 3)
+
+		-- Name
+		local nameLbl = makeLabel(row, r.name, 12, Color3.fromRGB(220,220,235), Enum.Font.GothamBold)
+		nameLbl.Size = UDim2.new(0.55, 0, 0, 20)
+		nameLbl.Position = UDim2.new(0, 12, 0, 4)
+		nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+		-- Path
+		local pathLbl = makeLabel(row, r.path, 10, Color3.fromRGB(95,95,115))
+		pathLbl.Size = UDim2.new(1, -16, 0, 14)
+		pathLbl.Position = UDim2.new(0, 12, 0, 26)
+		pathLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+		-- Type tag
+		local typeShort = r.class == "RemoteFunction" and "Func" or r.class == "UnreliableRemoteEvent" and "Unrel" or "Event"
+		local typeCol = r.class == "RemoteFunction" and Color3.fromRGB(195,150,40)
+			or r.class == "UnreliableRemoteEvent" and Color3.fromRGB(195,65,65)
+			or Color3.fromRGB(60,130,215)
+		local typeTag = makeLabel(row, typeShort, 9, Color3.fromRGB(255,255,255), Enum.Font.GothamBold)
+		typeTag.Size = UDim2.new(0, 40, 0, 17)
+		typeTag.Position = UDim2.new(1, -92, 0.5, -8)
+		typeTag.BackgroundColor3 = typeCol
+		typeTag.BackgroundTransparency = 0
+		typeTag.TextXAlignment = Enum.TextXAlignment.Center
+		makeCorner(typeTag, 4)
+
+		-- Risk tag
+		local riskTag = makeLabel(row, r.risk, 9, Color3.fromRGB(255,255,255), Enum.Font.GothamBold)
+		riskTag.Size = UDim2.new(0, 44, 0, 17)
+		riskTag.Position = UDim2.new(1, -46, 0.5, -8)
+		riskTag.BackgroundColor3 = riskColor[r.risk]
+		riskTag.BackgroundTransparency = 0
+		riskTag.TextXAlignment = Enum.TextXAlignment.Center
+		makeCorner(riskTag, 4)
+
+		-- Detail section (hidden by default)
+		local detail = Instance.new("Frame")
+		detail.Size = UDim2.new(1, -12, 0, 160)
+		detail.Position = UDim2.new(0, 6, 0, 48)
+		detail.BackgroundColor3 = Color3.fromRGB(20,20,28)
+		detail.BorderSizePixel = 0
+		detail.Parent = row
+		makeCorner(detail, 5)
+
+		local infoLbl = makeLabel(detail, "Class: "..r.class.."\nPath:  "..r.path.."\nRisk:  "..r.risk, 10, Color3.fromRGB(160,160,180), Enum.Font.Code)
+		infoLbl.Size = UDim2.new(1, -10, 0, 44)
+		infoLbl.Position = UDim2.new(0, 6, 0, 5)
+		infoLbl.TextYAlignment = Enum.TextYAlignment.Top
+
+		-- Action buttons in detail
+		local btnTest = makeButton(detail, "Fire test", 10, Color3.fromRGB(38,85,140))
+		btnTest.Size = UDim2.new(0, 80, 0, 24)
+		btnTest.Position = UDim2.new(0, 6, 0, 54)
+		btnTest.TextColor3 = Color3.fromRGB(100,180,255)
+
+		local btnSnip = makeButton(detail, "Copy snippet", 10, Color3.fromRGB(38,38,52))
+		btnSnip.Size = UDim2.new(0, 96, 0, 24)
+		btnSnip.Position = UDim2.new(0, 92, 0, 54)
+
+		local btnLog = makeButton(detail, "Log to console", 10, Color3.fromRGB(38,38,52))
+		btnLog.Size = UDim2.new(0, 104, 0, 24)
+		btnLog.Position = UDim2.new(0, 194, 0, 54)
+
+		local snippet = r.class == "RemoteFunction"
+			and ('local r = RS:WaitForChild("'..r.name..'")\nr.OnServerInvoke = function(plr,...)\n    -- validate here\nend')
+			or  ('local r = RS:WaitForChild("'..r.name..'")\nr.OnServerEvent:Connect(function(plr,...)\n    -- validate here\nend)')
+
+		local snipLbl = makeLabel(detail, snippet, 9, Color3.fromRGB(150,200,150), Enum.Font.Code)
+		snipLbl.Size = UDim2.new(1, -12, 0, 56)
+		snipLbl.Position = UDim2.new(0, 6, 0, 84)
+		snipLbl.TextYAlignment = Enum.TextYAlignment.Top
+		snipLbl.BackgroundColor3 = Color3.fromRGB(14,14,20)
+		snipLbl.BackgroundTransparency = 0
+		makeCorner(snipLbl, 4)
+
+		btnSnip.MouseButton1Click:Connect(function()
+			-- Can't use clipboard in game, so print to output
+			print("[RemoteScanner] Snippet for "..r.name..":\n"..snippet)
+			addLog("Printed snippet for "..r.name.." to output", "ok")
+		end)
+
+		btnLog.MouseButton1Click:Connect(function()
+			addLog("["..r.risk.."]["..r.class.."] "..r.path, r.risk == "HIGH" and "error" or r.risk == "MED" and "warn" or "info")
+			switchTab("log")
+		end)
+
+		btnTest.MouseButton1Click:Connect(function()
+			switchTab("test")
+			addLog("Selected for test: "..r.name, "info")
+		end)
+
+		-- Click to expand/collapse
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, 0, 0, 44)
+		btn.Position = UDim2.new(0, 0, 0, 0)
+		btn.BackgroundTransparency = 1
+		btn.Text = ""
+		btn.Parent = row
+
+		btn.MouseButton1Click:Connect(function()
+			if expandedRow == row then
+				-- Collapse
+				TweenService:Create(row, TweenInfo.new(0.18), {Size = UDim2.new(1, 0, 0, 44)}):Play()
+				expandedRow = nil
+			else
+				-- Collapse previous
+				if expandedRow then
+					TweenService:Create(expandedRow, TweenInfo.new(0.18), {Size = UDim2.new(1, 0, 0, 44)}):Play()
+				end
+				-- Expand this one
+				TweenService:Create(row, TweenInfo.new(0.18), {Size = UDim2.new(1, 0, 0, 220)}):Play()
+				expandedRow = row
+				addLog("Inspected: "..r.name, "info")
+			end
+		end)
+	end
+end
+
+buildRemoteRows()
+
+-- ─── TEST panel ──────────────────────────────────────────────────────────────
+local function makePanelLabel(parent, text, y)
+	local l = makeLabel(parent, text, 11, Color3.fromRGB(150,150,170))
+	l.Size = UDim2.new(1, -16, 0, 18)
+	l.Position = UDim2.new(0, 8, 0, y)
+	return l
+end
+
+makePanelLabel(panelTest, "Select a remote and fire arguments at it:", 4)
+
+local remoteDropdown = Instance.new("TextButton")
+remoteDropdown.Size = UDim2.new(1, -16, 0, 28)
+remoteDropdown.Position = UDim2.new(0, 8, 0, 26)
+remoteDropdown.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+remoteDropdown.BorderSizePixel = 0
+remoteDropdown.Text = "▾  Select remote…"
+remoteDropdown.TextColor3 = Color3.fromRGB(160, 160, 180)
+remoteDropdown.TextSize = 11
+remoteDropdown.Font = Enum.Font.Gotham
+remoteDropdown.TextXAlignment = Enum.TextXAlignment.Left
+remoteDropdown.Parent = panelTest
+makeCorner(remoteDropdown, 5)
+
+-- Simple dropdown list
+local dropList = Instance.new("Frame")
+dropList.Size = UDim2.new(1, -16, 0, math.min(#results, 5) * 26)
+dropList.Position = UDim2.new(0, 8, 0, 56)
+dropList.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+dropList.BorderSizePixel = 0
+dropList.Visible = false
+dropList.ZIndex = 20
+dropList.Parent = panelTest
+makeCorner(dropList, 5)
+
+local selectedRemote = nil
+local dropListLayout = Instance.new("UIListLayout")
+dropListLayout.Parent = dropList
+
+for _, r in ipairs(results) do
+	local item = Instance.new("TextButton")
+	item.Size = UDim2.new(1, 0, 0, 26)
+	item.BackgroundTransparency = 1
+	item.Text = "  "..r.name.." ("..r.risk..")"
+	item.TextColor3 = riskColor[r.risk]
+	item.TextSize = 11
+	item.Font = Enum.Font.Gotham
+	item.TextXAlignment = Enum.TextXAlignment.Left
+	item.ZIndex = 21
+	item.Parent = dropList
+	item.MouseButton1Click:Connect(function()
+		selectedRemote = r
+		remoteDropdown.Text = "▾  "..r.name.." ["..r.risk.."]"
+		remoteDropdown.TextColor3 = riskColor[r.risk]
+		dropList.Visible = false
+		addLog("Test target set: "..r.name, "info")
+	end)
+end
+
+remoteDropdown.MouseButton1Click:Connect(function()
+	dropList.Visible = not dropList.Visible
+end)
+
+makePanelLabel(panelTest, "Arguments (comma separated):", 66)
+
+local argsInput = Instance.new("TextBox")
+argsInput.Size = UDim2.new(1, -16, 0, 28)
+argsInput.Position = UDim2.new(0, 8, 0, 88)
+argsInput.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+argsInput.BorderSizePixel = 0
+argsInput.Text = ""
+argsInput.PlaceholderText = "e.g.  \"sword\", 50, true"
+argsInput.PlaceholderColor3 = Color3.fromRGB(80,80,100)
+argsInput.TextColor3 = Color3.fromRGB(200,200,220)
+argsInput.TextSize = 11
+argsInput.Font = Enum.Font.Code
+argsInput.ClearTextOnFocus = false
+argsInput.Parent = panelTest
+makeCorner(argsInput, 5)
+
+local btnFire = makeButton(panelTest, "▶  Fire", 11, Color3.fromRGB(30,80,145), Color3.fromRGB(100,190,255))
+btnFire.Size = UDim2.new(0, 90, 0, 28)
+btnFire.Position = UDim2.new(0, 8, 0, 124)
+
+local btnFuzz = makeButton(panelTest, "⚡ Fuzz", 11, Color3.fromRGB(90,55,15), Color3.fromRGB(210,160,50))
+btnFuzz.Size = UDim2.new(0, 90, 0, 28)
+btnFuzz.Position = UDim2.new(0, 104, 0, 124)
+
+local outputBox = Instance.new("TextLabel")
+outputBox.Size = UDim2.new(1, -16, 0, 120)
+outputBox.Position = UDim2.new(0, 8, 0, 162)
+outputBox.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+outputBox.BorderSizePixel = 0
+outputBox.Text = "Output will appear here…"
+outputBox.TextColor3 = Color3.fromRGB(140,140,160)
+outputBox.TextSize = 10
+outputBox.Font = Enum.Font.Code
+outputBox.TextXAlignment = Enum.TextXAlignment.Left
+outputBox.TextYAlignment = Enum.TextYAlignment.Top
+outputBox.TextWrapped = true
+outputBox.Parent = panelTest
+makeCorner(outputBox, 5)
+
+local FUZZ_PAYLOADS = {"nil","true","false","0","999999","math.huge","-1",'"admin"','"../exploit"',"{}","0,0,0","string.rep('A',9999)"}
+
+btnFire.MouseButton1Click:Connect(function()
+	if not selectedRemote then
+		outputBox.Text = "⚠ Select a remote first."
+		outputBox.TextColor3 = Color3.fromRGB(210,160,40)
+		return
+	end
+	local args = argsInput.Text
+	local col = selectedRemote.risk == "HIGH" and Color3.fromRGB(215,70,70)
+		or selectedRemote.risk == "MED" and Color3.fromRGB(205,155,40)
+		or Color3.fromRGB(60,185,100)
+	outputBox.TextColor3 = col
+	outputBox.Text = "> FireServer: "..selectedRemote.name.."("..args..")\n"
+		.."> Type: "..selectedRemote.class.."\n"
+		.."> Risk: "..selectedRemote.risk.."\n\n"
+		..(selectedRemote.risk == "HIGH" and "⚠ HIGH RISK — verify server validates ALL args!" or
+		   selectedRemote.risk == "MED"  and "⚡ Medium risk — double-check server handler." or
+		   "✓ Low risk — still verify server-side.")
+	addLog("Fired "..selectedRemote.name.."("..args..")", selectedRemote.risk == "HIGH" and "warn" or "info")
+end)
+
+btnFuzz.MouseButton1Click:Connect(function()
+	if not selectedRemote then
+		outputBox.Text = "⚠ Select a remote first."
+		return
+	end
+	local lines = {"> Fuzz test: "..selectedRemote.name.."\n"}
+	for i = 1, 6 do
+		local p = FUZZ_PAYLOADS[i]
+		table.insert(lines, string.format("> Fire(%s) → [Simulated]", p))
+	end
+	table.insert(lines, "\nCheck output window for errors.")
+	outputBox.Text = table.concat(lines, "\n")
+	outputBox.TextColor3 = Color3.fromRGB(205,155,40)
+	addLog("Fuzz tested "..selectedRemote.name.." with 6 payloads", "warn")
+	for i = 1, 6 do
+		print(string.format("[RemoteScanner][FUZZ] %s(%s)", selectedRemote.name, FUZZ_PAYLOADS[i]))
+	end
+end)
+
+-- ─── SETTINGS panel ──────────────────────────────────────────────────────────
+local function makeCheckbox(parent, labelText, yPos, default)
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(1, -16, 0, 26)
+	frame.Position = UDim2.new(0, 8, 0, yPos)
+	frame.BackgroundTransparency = 1
+	frame.Parent = parent
+
+	local box = Instance.new("Frame")
+	box.Size = UDim2.new(0, 16, 0, 16)
+	box.Position = UDim2.new(0, 0, 0.5, -8)
+	box.BackgroundColor3 = default and Color3.fromRGB(60,130,215) or Color3.fromRGB(38,38,52)
+	box.BorderSizePixel = 0
+	box.Parent = frame
+	makeCorner(box, 3)
+
+	local check = makeLabel(box, default and "✓" or "", 11, Color3.fromRGB(255,255,255), Enum.Font.GothamBold)
+	check.Size = UDim2.new(1,0,1,0)
+	check.TextXAlignment = Enum.TextXAlignment.Center
+
+	local lbl = makeLabel(frame, labelText, 11, Color3.fromRGB(190,190,210))
+	lbl.Size = UDim2.new(1, -26, 1, 0)
+	lbl.Position = UDim2.new(0, 24, 0, 0)
+
+	local state = default
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1,0,1,0)
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+	btn.Parent = frame
+	btn.MouseButton1Click:Connect(function()
+		state = not state
+		box.BackgroundColor3 = state and Color3.fromRGB(60,130,215) or Color3.fromRGB(38,38,52)
+		check.Text = state and "✓" or ""
+		addLog((state and "Enabled: " or "Disabled: ")..labelText, "info")
+	end)
+	return frame
+end
+
+makePanelLabel(panelSettings, "Scan locations", 4)
+makeCheckbox(panelSettings, "ReplicatedStorage", 24, true)
+makeCheckbox(panelSettings, "Workspace", 54, true)
+makeCheckbox(panelSettings, "ServerStorage (needs Script, not LocalScript)", 84, false)
+
+makePanelLabel(panelSettings, "Risk heuristics", 122)
+makeCheckbox(panelSettings, "Flag by name pattern (Purchase, Damage, etc.)", 142, true)
+makeCheckbox(panelSettings, "Always flag RemoteFunctions as med+", 172, true)
+makeCheckbox(panelSettings, "Flag UnreliableRemoteEvents", 202, true)
+
+makePanelLabel(panelSettings, "Display", 240)
+makeCheckbox(panelSettings, "Show full path in rows", 260, true)
+makeCheckbox(panelSettings, "Show code snippets in detail view", 290, true)
+
+-- ─── Rescan & Export ─────────────────────────────────────────────────────────
+btnRescan.MouseButton1Click:Connect(function()
+	addLog("Rescan triggered — rebuilding rows…", "info")
+	task.wait(0.05)
+	results = {}
+	scan(RS)
+	scan(workspace)
+	table.sort(results, function(a, b)
+		local o = {HIGH=1, MED=2, LOW=3}
+		return (o[a.risk] or 9) < (o[b.risk] or 9)
+	end)
+	buildRemoteRows()
+	addLog(string.format("Scan complete. %d remotes found.", #results), "ok")
+end)
+
+btnExport.MouseButton1Click:Connect(function()
+	print("[RemoteScanner v3] ===== EXPORT =====")
+	for _, r in ipairs(results) do
+		print(string.format("  [%s][%s] %s", r.risk, r.class, r.path))
+	end
+	print("[RemoteScanner v3] ==================")
+	addLog("Exported "..#results.." remotes to output window", "ok")
+end)
+
+-- ─── Init ────────────────────────────────────────────────────────────────────
+switchTab("remotes")
+addLog("RemoteScanner v3 ready", "ok")
+addLog(string.format("Found %d remotes — %d HIGH, %d MED, %d LOW", #results, nHigh, nMed, nLow),
+	nHigh > 0 and "warn" or "ok")
+for _, r in ipairs(results) do
+	if r.risk == "HIGH" then
+		addLog("[HIGH] "..r.path, "error")
+	end
+end
